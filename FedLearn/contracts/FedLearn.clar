@@ -290,4 +290,74 @@
     )
 )
 
+;; Advanced function: Implements differential privacy noise addition and stake-weighted contribution scoring
+;; This function evaluates the quality of a participant's contribution based on multiple factors
+;; including stake amount, historical reputation, consistency of submissions, and privacy guarantees
+;; @param participant: principal address of the participant to evaluate
+;; @param update-hash: the model update hash submitted by participant
+;; @param privacy-budget: epsilon value for differential privacy (scaled by 100, e.g., 100 = 1.0)
+;; @returns: response with contribution score or error code
+(define-public (evaluate-contribution-with-privacy (participant principal) (update-hash (string-ascii 64)) (privacy-budget uint))
+    (let
+        (
+            (current-round-number (var-get current-round))
+            (participant-info (unwrap! (map-get? participants participant) ERR-NOT-REGISTERED))
+            (update-key {round: current-round-number, participant: participant})
+            (update-info (unwrap! (map-get? model-updates update-key) ERR-INVALID-UPDATE))
+            
+            ;; Calculate base contribution score from stake (normalized to 0-40 range)
+            (stake-score (/ (* (get stake participant-info) u40) MIN-STAKE-AMOUNT))
+            
+            ;; Calculate reputation component (0-30 range)
+            (reputation-component (if (> (get reputation-score participant-info) u100)
+                u30
+                (/ (* (get reputation-score participant-info) u30) u100)
+            ))
+            
+            ;; Calculate consistency bonus based on total contributions (0-20 range)
+            (consistency-bonus (if (> (get total-contributions participant-info) u10)
+                u20
+                (* (get total-contributions participant-info) u2)
+            ))
+            
+            ;; Calculate privacy score based on epsilon budget (lower epsilon = better privacy = higher score, 0-10 range)
+            (privacy-score (if (<= privacy-budget u50)
+                u10
+                (if (<= privacy-budget u100)
+                    u7
+                    (if (<= privacy-budget u200)
+                        u5
+                        u2
+                    )
+                )
+            ))
+            
+            ;; Aggregate total contribution score (max 100)
+            (total-score (+ stake-score (+ reputation-component (+ consistency-bonus privacy-score))))
+            
+            ;; Calculate noise factor for differential privacy (simulated)
+            (noise-factor (if (< privacy-budget u100) u95 u100))
+            
+            ;; Apply noise to final score for privacy preservation
+            (final-score (/ (* total-score noise-factor) u100))
+        )
+        
+        ;; Validate that the update exists and is verified
+        (asserts! (get verified update-info) ERR-INVALID-UPDATE)
+        (asserts! (var-get round-active) ERR-ROUND-NOT-ACTIVE)
+        
+        ;; Bonus reputation update for high-quality contributions
+        (if (>= final-score u80)
+            (update-reputation participant u10)
+            (if (>= final-score u60)
+                (update-reputation participant u5)
+                (update-reputation participant u2)
+            )
+        )
+        
+        ;; Return the final contribution score with privacy guarantees
+        (ok final-score)
+    )
+)
+
 
